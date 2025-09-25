@@ -1,35 +1,28 @@
-import Twilio from "twilio";
+import twilio from 'twilio';
 
-export const config = {
-  api: {
-    bodyParser: false, // Twilio sends x-www-form-urlencoded
-  },
-};
+const { TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER } = process.env;
+const client = twilio(TWILIO_SID, TWILIO_AUTH_TOKEN);
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).send("Method not allowed");
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
   }
 
-  let body = "";
-  req.on("data", chunk => (body += chunk.toString()));
-  req.on("end", () => {
-    const params = new URLSearchParams(body);
-    const from = params.get("From"); // sender's number
-    const incomingMsg = params.get("Body");
+  const { From: from, Body: body } = req.body;
 
-    // Use environment variables
-    const client = new Twilio(TWILIO_SID, TWILIO_AUTH_TOKEN);
+  console.log(`Received message from ${from}: ${body}`);
 
-    client.messages
-      .create({
-        from: `whatsapp:${TWILIO_WHATSAPP_NUMBER}`, // sandbox or your WhatsApp number
-        to: from,
-        body: "Hello my sweet",
-      })
-      .then(message => console.log("Replied:", message.sid))
-      .catch(err => console.error(err));
+  try {
+    await client.messages.create({
+      from: `whatsapp:${TWILIO_WHATSAPP_NUMBER}`,
+      to: from,
+      body: `You said: "${body}" ✅`,
+    });
+    console.log('Reply sent successfully!');
+  } catch (err) {
+    console.error('Error sending reply:', err);
+  }
 
-    res.status(200).send("<Response></Response>");
-  });
+  res.setHeader('Content-Type', 'text/xml');
+  res.status(200).send('<Response></Response>');
 }
