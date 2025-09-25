@@ -81,39 +81,58 @@ function bookingSummary(b) {
 
 // ================= Twilio Send Helpers =================
 async function sendText(to, message) {
-  const msg = await twilioClient.messages.create({
-    from: twilioNumber,
-    to: `whatsapp:${to.replace('whatsapp:', '')}`,
-    body: message,
-  });
-  console.log('Sent text:', msg.sid);
+  try {
+    const msg = await twilioClient.messages.create({
+      from: twilioNumber,
+      to: `whatsapp:${to.replace('whatsapp:', '')}`,
+      body: message,
+    });
+    console.log('Sent text:', msg.sid);
+  } catch (err) {
+    console.error('Twilio sendText error:', err);
+  }
 }
 
 async function sendInteractive(to, text, buttons) {
-  const msg = await twilioClient.messages.create({
-    from: twilioNumber,
-    to: `whatsapp:${to.replace('whatsapp:', '')}`,
-    interactive: {
-      type: 'button',
-      body: { text },
-      action: { buttons },
-    },
-  });
-  console.log('Sent interactive:', msg.sid);
+  if (!text || !buttons || !buttons.length) {
+    console.error('Interactive message missing text or buttons, sending fallback text.');
+    return sendText(to, text || 'Please choose an option.');
+  }
+
+  try {
+    const msg = await twilioClient.messages.create({
+      from: twilioNumber,
+      to: `whatsapp:${to.replace('whatsapp:', '')}`,
+      interactive: {
+        type: 'button',
+        body: { text: String(text) },
+        action: {
+          buttons: buttons.map(b => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title },
+          })),
+        },
+      },
+    });
+    console.log('Sent interactive:', msg.sid);
+  } catch (err) {
+    console.error('Twilio sendInteractive error:', err);
+    await sendText(to, text); // fallback to text if interactive fails
+  }
 }
 
 async function sendMainMenu(to) {
   await sendInteractive(to, '👋 Welcome to *Cab Assistant*! Please choose an option:', [
-    { type: 'reply', reply: { id: 'book_cab', title: '🚖 Book Cab' } },
-    { type: 'reply', reply: { id: 'my_bookings', title: '📑 My Bookings' } },
-    { type: 'reply', reply: { id: 'help', title: 'ℹ Help' } },
+    { id: 'book_cab', title: '🚖 Book Cab' },
+    { id: 'my_bookings', title: '📑 My Bookings' },
+    { id: 'help', title: 'ℹ Help' },
   ]);
 }
 
 async function sendTimeOptions(to) {
   await sendInteractive(to, '🕒 When would you like your cab?', [
-    { type: 'reply', reply: { id: 'now', title: 'Now' } },
-    { type: 'reply', reply: { id: 'later', title: 'Later' } },
+    { id: 'now', title: 'Now' },
+    { id: 'later', title: 'Later' },
   ]);
 }
 
@@ -190,7 +209,7 @@ export default async function handler(req, res) {
     }
 
   } catch (err) {
-    console.error('Error:', err);
+    console.error('Error handling message:', err);
   }
 
   return res.status(200).send('OK');
