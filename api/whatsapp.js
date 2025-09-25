@@ -1,27 +1,17 @@
 import mongoose from 'mongoose';
 import twilio from 'twilio';
-import { parse, format } from 'date-fns';
 
 const { TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, MONGO_URI } = process.env;
 
-// ================= MongoDB Connection Cache =================
-let cached = global.mongoose;
-if (!cached) cached = global.mongoose = { conn: null, promise: null };
+const client = twilio(TWILIO_SID, TWILIO_AUTH_TOKEN);
 
-async function connectToDatabase() {
-  if (cached.conn) return cached.conn;
-
-  if (!cached.promise) {
-    cached.promise = mongoose.connect(MONGO_URI).then((mongoose) => {
-      console.log('✅ Connected to MongoDB');
-      return mongoose;
-    });
-  }
-  cached.conn = await cached.promise;
-  return cached.conn;
+// MongoDB setup
+if (!mongoose.connection.readyState) {
+  await mongoose.connect(MONGO_URI);
+  console.log('✅ Connected to MongoDB');
 }
 
-// ================= MongoDB Schemas =================
+// Schemas
 const User = mongoose.models.User || mongoose.model('User', new mongoose.Schema({
   jid: { type: String, unique: true },
   name: String,
@@ -45,172 +35,83 @@ const Booking = mongoose.models.Booking || mongoose.model('Booking', new mongoos
   createdAt: { type: Date, default: Date.now },
 }));
 
-// ================= Twilio Client =================
-const twilioClient = twilio(TWILIO_SID, TWILIO_AUTH_TOKEN);
-const twilioNumber = TWILIO_WHATSAPP_NUMBER;
-
-// ================= Helpers =================
+// Helpers
 function generateBookingId() {
   return 'CAB' + Math.floor(1000 + Math.random() * 9000);
 }
 
-function normalizeTime(input) {
-  if (!input) return null;
-  const clean = input.toLowerCase().trim();
-  if (clean === 'now') return 'Now';
-  if (clean === 'later') return 'Later';
-
-  const patterns = ['h:mm a', 'h a', 'HH:mm', 'h.mm a', 'h.mm'];
-  for (const p of patterns) {
-    try {
-      const parsed = parse(clean, p, new Date());
-      if (!isNaN(parsed)) return format(parsed, 'hh:mm a');
-    } catch {}
-  }
-  return input;
+async function sendMessage(to, body) {
+  await client.messages.create({
+    from: `whatsapp:${TWILIO_WHATSAPP_NUMBER}`,
+    to,
+    body, // default text messages only
+  });
 }
 
-function bookingSummary(b) {
-  return `📌 *Booking ID:* ${b.bookingId}
-🚖 *Pickup:* ${b.pickup}
-📍 *Drop:* ${b.drop}
-🕒 *Time:* ${b.time}
-📊 *Status:* ${b.status}
-💰 Fare: $${b.fare}`;
-}
-
-// ================= Twilio Send Helpers =================
-async function sendText(to, message) {
-  try {
-    const msg = await twilioClient.messages.create({
-      from: twilioNumber,
-      to: `whatsapp:${to.replace('whatsapp:', '')}`,
-      body: message,
-    });
-    console.log('Sent text:', msg.sid);
-  } catch (err) {
-    console.error('Twilio sendText error:', err);
-  }
-}
-
-async function sendInteractive(to, text, buttons) {
-  if (!text || !buttons || !buttons.length) {
-    console.error('Interactive message missing text or buttons, sending fallback text.');
-    return sendText(to, text || 'Please choose an option.');
-  }
-
-  try {
-    const msg = await twilioClient.messages.create({
-      from: twilioNumber,
-      to: `whatsapp:${to.replace('whatsapp:', '')}`,
-      interactive: {
-        type: 'button',
-        body: { text: String(text) },
-        action: {
-          buttons: buttons.map(b => ({
-            type: 'reply',
-            reply: { id: b.id, title: b.title },
-          })),
-        },
-      },
-    });
-    console.log('Sent interactive:', msg.sid);
-  } catch (err) {
-    console.error('Twilio sendInteractive error:', err);
-    await sendText(to, text); // fallback to text if interactive fails
-  }
-}
-
-async function sendMainMenu(to) {
-  await sendInteractive(to, '👋 Welcome to *Cab Assistant*! Please choose an option:', [
-    { id: 'book_cab', title: '🚖 Book Cab' },
-    { id: 'my_bookings', title: '📑 My Bookings' },
-    { id: 'help', title: 'ℹ Help' },
-  ]);
-}
-
-async function sendTimeOptions(to) {
-  await sendInteractive(to, '🕒 When would you like your cab?', [
-    { id: 'now', title: 'Now' },
-    { id: 'later', title: 'Later' },
-  ]);
-}
-
-// ================= Vercel Handler =================
+// Vercel handler
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  await connectToDatabase();
+  const from = req.body.From;
+  const body = req.body.Body?.trim();
 
-  const from = req.body.From.replace('whatsapp:', '');
-  let command = req.body.Body?.trim();
-
-  if (req.body.Interactive?.ButtonReply) command = req.body.Interactive.ButtonReply.Id;
-  if (req.body.Interactive?.ListReply) command = req.body.Interactive.ListReply.Id;
-
-  if (!command) return res.status(200).send('OK');
+  if (!body) return res.status(200).send('OK');
 
   try {
+    // Ensure user exists
     let user = await User.findOne({ jid: from });
-    if (!user) {
-      user = await User.create({ jid: from, name: 'User' });
-      await sendMainMenu(from);
-      return res.status(200).send('OK');
-    }
+    if (!user) user = await User.create({ jid: from, name: 'User' });
 
+    // Load/create session
     let session = await Session.findOne({ jid: from });
     if (!session) session = await Session.create({ jid: from, step: 0, booking: {} });
 
-    // ===== Commands =====
-    if (command === 'book_cab') {
+    // Booking flow using only text messages
+    if (body.toLowerCase() === 'book cab' && session.step === 0) {
       session.step = 1;
       await session.save();
-      return sendText(from, '🚖 Where should I pick you up from? 📍');
+      return sendMessage(from, '🚖 Where should we pick you up from?');
     }
 
-    if (command === 'my_bookings') {
-      const bookings = await Booking.find({ jid: from }).sort({ createdAt: -1 }).limit(5);
-      if (!bookings.length) return sendText(from, '📭 No bookings yet.');
-      const summary = bookings.map(b => `🆔 ${b.bookingId} | ${b.pickup} → ${b.drop} | ${b.time} | ${b.status} | 💰 $${b.fare}`).join('\n');
-      return sendText(from, `📑 Your recent bookings:\n\n${summary}`);
-    }
-
-    if (command === 'help') return sendMainMenu(from);
-
-    // ===== Booking Flow =====
     if (session.step === 1) {
-      session.booking.pickup = command;
+      session.booking.pickup = body;
       session.step = 2;
       await session.save();
-      return sendText(from, '📍 Where is your drop location? 🏁');
+      return sendMessage(from, '📍 Where is your drop location?');
     }
 
     if (session.step === 2) {
-      session.booking.drop = command;
+      session.booking.drop = body;
       session.step = 3;
       await session.save();
-      return sendTimeOptions(from);
+      return sendMessage(from, '🕒 When would you like your cab? Reply with "Now" or "Later".');
     }
 
     if (session.step === 3) {
-      session.booking.time = normalizeTime(command);
+      session.booking.time = body;
       session.booking.jid = from;
       session.booking.bookingId = generateBookingId();
       session.booking.fare = 20;
 
       const newBooking = await Booking.create(session.booking);
-      await sendText(from, `✅ *Booking Confirmed!*\n\n${bookingSummary(newBooking)}`);
+      await sendMessage(from,
+        `✅ Booking Confirmed!\nBooking ID: ${newBooking.bookingId}\nPickup: ${newBooking.pickup}\nDrop: ${newBooking.drop}\nTime: ${newBooking.time}\nFare: $${newBooking.fare}`
+      );
 
+      // Reset session
       session.step = 0;
       session.booking = {};
       await session.save();
 
-      return sendMainMenu(from);
+      return sendMessage(from, 'Type "Book Cab" to make another booking.');
     }
 
+    // Default reply
+    await sendMessage(from, 'Hi! Type "Book Cab" to start a booking.');
+
   } catch (err) {
-    console.error('Error handling message:', err);
+    console.error('Error:', err);
   }
 
-  return res.status(200).send('OK');
+  res.status(200).send('OK');
 }
