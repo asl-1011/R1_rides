@@ -4,13 +4,24 @@ import { parse, format } from 'date-fns';
 
 const { TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, MONGO_URI } = process.env;
 
-// ========== MongoDB Setup ==========
-if (!mongoose.connection.readyState) {
-  await mongoose.connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  });
-  console.log('✅ Connected to MongoDB');
+// ========== MongoDB Connection Cache ==========
+let cached = global.mongoose;
+if (!cached) cached = global.mongoose = { conn: null, promise: null };
+
+async function connectToDatabase() {
+  if (cached.conn) return cached.conn;
+
+  if (!cached.promise) {
+    cached.promise = mongoose.connect(MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    }).then((mongoose) => {
+      console.log('✅ Connected to MongoDB');
+      return mongoose;
+    });
+  }
+  cached.conn = await cached.promise;
+  return cached.conn;
 }
 
 // ========== Schemas ==========
@@ -74,6 +85,9 @@ const twilioNumber = TWILIO_WHATSAPP_NUMBER;
 // ========== Vercel Handler ==========
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+
+  // Ensure MongoDB is connected
+  await connectToDatabase();
 
   const from = req.body.From;
   let command = req.body.Body?.trim();
