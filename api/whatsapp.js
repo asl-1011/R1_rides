@@ -10,7 +10,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
   const from = req.body.From;
-  const input = req.body.Body?.trim().toLowerCase() || req.body.Buttons?.Payload?.toLowerCase();
+  const input = (req.body.Body || req.body.ButtonText || req.body.Buttons?.Payload || '').trim().toLowerCase();
 
   if (!userSessions[from]) userSessions[from] = { step: 'start' };
 
@@ -18,7 +18,6 @@ export default async function handler(req, res) {
 
   switch (userSessions[from].step) {
     case 'start':
-      // Main menu buttons
       messagePayload = {
         from: WHATSAPP_NUMBER,
         to: from,
@@ -38,11 +37,7 @@ export default async function handler(req, res) {
 
     case 'menu':
       if (input === 'book_cab') {
-        messagePayload = {
-          from: WHATSAPP_NUMBER,
-          to: from,
-          body: 'Great! Where should we pick you up from?'
-        };
+        messagePayload = { from: WHATSAPP_NUMBER, to: from, body: 'Where should we pick you up from?' };
         userSessions[from].step = 'pickup';
       } else if (input === 'check_status') {
         messagePayload = { from: WHATSAPP_NUMBER, to: from, body: 'Feature not implemented yet.' };
@@ -67,7 +62,6 @@ export default async function handler(req, res) {
         break;
       }
       userSessions[from].dropoff = input;
-      // Time selection buttons
       messagePayload = {
         from: WHATSAPP_NUMBER,
         to: from,
@@ -91,8 +85,6 @@ export default async function handler(req, res) {
         break;
       }
       userSessions[from].time = input;
-
-      // Booking confirmation message
       messagePayload = {
         from: WHATSAPP_NUMBER,
         to: from,
@@ -110,7 +102,7 @@ Time: ${userSessions[from].time}`
       break;
   }
 
-  // Ensure at least body or interactive exists
+  // Safety check to prevent 21619 error
   if (!messagePayload.body && !messagePayload.interactive) {
     messagePayload.body = 'Sorry, something went wrong. Please try again.';
   }
