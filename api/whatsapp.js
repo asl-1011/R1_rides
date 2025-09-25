@@ -14,7 +14,7 @@ export default async function handler(req, res) {
 
   try {
     await client.messages.create({
-      from: `whatsapp:${TWILIO_WHATSAPP_NUMBER}`,
+      from: `${TWILIO_WHATSAPP_NUMBER}`,
       to: from,
       body: `You said: "${body}" ✅`,
     });
