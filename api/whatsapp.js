@@ -12,10 +12,7 @@ async function connectToDatabase() {
   if (cached.conn) return cached.conn;
 
   if (!cached.promise) {
-    cached.promise = mongoose.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    }).then((mongoose) => {
+    cached.promise = mongoose.connect(MONGO_URI).then((mongoose) => {
       console.log('✅ Connected to MongoDB');
       return mongoose;
     });
@@ -86,7 +83,6 @@ const twilioNumber = TWILIO_WHATSAPP_NUMBER;
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // Ensure MongoDB is connected
   await connectToDatabase();
 
   const from = req.body.From;
@@ -145,7 +141,7 @@ export default async function handler(req, res) {
       session.booking.time = normalizeTime(command);
       session.booking.jid = from;
       session.booking.bookingId = generateBookingId();
-      session.booking.fare = 20; // fixed fare
+      session.booking.fare = 20;
 
       const newBooking = await Booking.create(session.booking);
       await sendWhatsApp(from, `✅ *Booking Confirmed!*\n\n${bookingSummary(newBooking)}`);
@@ -173,9 +169,10 @@ async function sendMainMenu(to) {
   await twilioClient.messages.create({
     from: twilioNumber,
     to,
+    body: '👋 Welcome to *Cab Assistant*! Please choose an option:',
     interactive: {
       type: 'button',
-      body: { text: '👋 Welcome to *Cab Assistant*! Please choose an option:' },
+      body: { text: 'Select an option:' },
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'book_cab', title: '🚖 Book Cab' } },
@@ -191,9 +188,10 @@ async function sendTimeOptions(to) {
   await twilioClient.messages.create({
     from: twilioNumber,
     to,
+    body: '🕒 When would you like your cab?',
     interactive: {
       type: 'button',
-      body: { text: '🕒 When would you like your cab?' },
+      body: { text: 'Select a time:' },
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'now', title: 'Now' } },
